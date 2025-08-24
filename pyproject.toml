@@ -1,0 +1,28 @@
+[project.scripts]
+mockvisor = "mock_hypervisor.cli:app"
+mockvisord = "mock_hypervisor.daemon:main"
+[tool.setuptools]
+packages = ["mock_hypervisor"]
+[project]
+name = "univor"
+version = "0.1.0"
+description = "UNIVersal VM ORchestration tools"
+authors = [
+    { name = "Claudio M. Martinez Velasco", email= "clamaver@uma.es" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pytest",
+    "httpx",
+    "typer[all]",
+    "psutil",
+    "types-psutil",
+    "pydantic",
+    "rich"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["mock_hypervisor/tests"]
+

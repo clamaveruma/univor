@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+
+# Additional common Python ignores
+.mypy_cache/
+.pytest_cache/
+dist/
