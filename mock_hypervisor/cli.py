@@ -25,8 +25,23 @@ def start_server(port: int = typer.Option(None, help="Port to run the server on 
     if port:
         cmd += ["--port", str(port)]
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
-        print_and_log(f"Started mockvisord with PID {proc.pid} on port {port or 'auto'}.")
+        if port:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True, close_fds=True)
+            print_and_log(f"Started mockvisord with PID {proc.pid} on port {port}.")
+        else:
+            # Capture stdout to get the selected port
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, close_fds=True)
+            selected_port = None
+            assert proc.stdout is not None
+            # Read lines until we get the port info or process exits
+            for _ in range(10):
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                if line.startswith("[MOCKDAEMON] Selected port: "):
+                    selected_port = int(line.strip().split(": ")[-1])
+                    break
+            print_and_log(f"Started mockvisord with PID {proc.pid} on port {selected_port or 'auto'}.")
     except Exception as e:
         print_error(f"Failed to start mockvisord: {e}")
 
@@ -37,11 +52,8 @@ def list_servers():
     found = False
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
-            # Match process by name or command line
-            if (
-                proc.info['name'] == 'mockvisord' or
-                (proc.info['cmdline'] and 'mockvisord' in ' '.join(proc.info['cmdline']))
-            ):
+            # Match process by command line containing mock_hypervisor.daemon
+            if proc.info['cmdline'] and 'mock_hypervisor.daemon' in ' '.join(proc.info['cmdline']):
                 cons = proc.net_connections(kind='inet')
                 listen_ports = [c.laddr.port for c in cons if c.status == psutil.CONN_LISTEN]
                 if listen_ports:
@@ -73,6 +85,11 @@ def stop_server(port: int = typer.Argument(..., help="Port of the server")):
 def kill_server(pid: int = typer.Argument(..., help="PID of the server process to kill")):
     """Force kill a running server by PID (sends SIGTERM)."""
     try:
+        proc = psutil.Process(pid)
+        cmdline = ' '.join(proc.cmdline())
+        if 'mock_hypervisor.daemon' not in cmdline:
+            print_error(f"Refusing to kill PID {pid}: not a mockvisor daemon (cmdline: {cmdline})")
+            return
         os.kill(pid, signal.SIGTERM)
         print_and_log(f"Sent SIGTERM to process {pid}.")
     except Exception as e:

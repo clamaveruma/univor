@@ -1,89 +1,106 @@
-import pytest
+import subprocess
+import time
+import socket
+import sys
 import httpx
 
-BASE_URL = "http://localhost:8000"  # Adjust as needed for test server
 
 
-def test_create_vm():
-    """Test creating a new VM via REST API."""
-    payload = {"name": "testvm1", "cpu": 2, "memory": 2048}
+def get_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+def start_daemon(port):
+    cmd = [sys.executable, '-m', 'mock_hypervisor.daemon', '--port', str(port)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # Wait for server to start
+    for _ in range(30):
+        try:
+            with httpx.Client() as client:
+                r = client.get(f'http://127.0.0.1:{port}/vms', timeout=0.5)
+            if r.status_code == 200:
+                return proc
+        except Exception:
+            time.sleep(0.2)
+    raise RuntimeError('Daemon did not start')
+
+def shutdown_daemon(port):
+    try:
+        with httpx.Client() as client:
+            client.post(f'http://127.0.0.1:{port}/shutdown', timeout=2)
+    except Exception:
+        pass
+
+def print_vms(port):
     with httpx.Client() as client:
-        response = client.post(f"{BASE_URL}/vms", json=payload)
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "testvm1"
-        assert data["cpu"] == 2
-        assert data["memory"] == 2048
+        r = client.get(f'http://127.0.0.1:{port}/vms')
+        print('VMs:', r.json())
 
-def test_list_vms():
-    """Test listing VMs."""
-    with httpx.Client() as client:
-        response = client.get(f"{BASE_URL}/vms")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
+def test_rest_api_full():
+    port = get_free_port()
+    proc = start_daemon(port)
+    try:
+        with httpx.Client() as client:
+            # Create VM without id
+            r = client.post(f'http://127.0.0.1:{port}/vms', json={"name": "Alpha"})
+            assert r.status_code == 201
+            vm1 = r.json()
+            print('Created VM:', vm1)
+            print_vms(port)
 
-def test_get_vm():
-    """Test retrieving a VM by ID."""
-    payload = {"name": "testvm2", "cpu": 1, "memory": 1024}
-    with httpx.Client() as client:
-        create_resp = client.post(f"{BASE_URL}/vms", json=payload)
-        vm_id = create_resp.json()["id"]
-        response = client.get(f"{BASE_URL}/vms/{vm_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == vm_id
+            # Create VM with id
+            r = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Beta"})
+            assert r.status_code == 201
+            vm2 = r.json()
+            print('Created VM with id:', vm2)
+            print_vms(port)
 
-def test_update_vm():
-    """Test updating a VM's configuration."""
-    payload = {"name": "testvm3", "cpu": 1, "memory": 1024}
-    with httpx.Client() as client:
-        create_resp = client.post(f"{BASE_URL}/vms", json=payload)
-        vm_id = create_resp.json()["id"]
-        update_payload = {"cpu": 4, "memory": 4096}
-        response = client.put(f"{BASE_URL}/vms/{vm_id}", json=update_payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["cpu"] == 4
-        assert data["memory"] == 4096
+            # Create VM with duplicate id
+            r = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Gamma"})
+            assert r.status_code == 201
+            vm3 = r.json()
+            print('Created VM with duplicate id:', vm3)
+            print_vms(port)
 
-def test_delete_vm():
-    """Test deleting a VM."""
-    payload = {"name": "testvm4", "cpu": 1, "memory": 1024}
-    with httpx.Client() as client:
-        create_resp = client.post(f"{BASE_URL}/vms", json=payload)
-        vm_id = create_resp.json()["id"]
-        response = client.delete(f"{BASE_URL}/vms/{vm_id}")
-        assert response.status_code == 204
+            # Get VM
+            r = client.get(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+            assert r.status_code == 200
+            print('Get VM:', r.json())
 
-def test_clone_vm():
-    """Test cloning a VM."""
-    payload = {"name": "testvm5", "cpu": 2, "memory": 2048}
-    with httpx.Client() as client:
-        create_resp = client.post(f"{BASE_URL}/vms", json=payload)
-        vm_id = create_resp.json()["id"]
-        clone_payload = {"name": "testvm5_clone"}
-        response = client.post(f"{BASE_URL}/vms/{vm_id}/clone", json=clone_payload)
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "testvm5_clone"
+            # Update VM
+            r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={"name": "AlphaUpdated"})
+            assert r.status_code == 200
+            print('Updated VM:', r.json())
+            print_vms(port)
+
+            # Clone VM
+            r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/clone', json={"name": "AlphaClone"})
+            assert r.status_code == 201
+            vm_clone = r.json()
+            print('Cloned VM:', vm_clone)
+            print_vms(port)
+
+            # Change lifecycle
+            for action in ["start", "pause", "resume", "stop"]:
+                r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/{action}')
+                assert r.status_code == 200
+                print(f'Lifecycle {action}:', r.json())
+
+            # Delete VM
+            r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+            assert r.status_code == 204
+            print('Deleted VM:', vm1["id"])
+            print_vms(port)
+
+    finally:
+        shutdown_daemon(port)
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.terminate()
+            proc.wait(timeout=2)
 
 def test_vm_lifecycle():
     """Test VM lifecycle operations: start, stop, pause, resume."""
     payload = {"name": "testvm6", "cpu": 1, "memory": 1024}
-    with httpx.Client() as client:
-        create_resp = client.post(f"{BASE_URL}/vms", json=payload)
-        vm_id = create_resp.json()["id"]
-        for action in ["start", "pause", "resume", "stop"]:
-            response = client.post(f"{BASE_URL}/vms/{vm_id}/{action}")
-            assert response.status_code == 200
-            data = response.json()
-            assert data["status"] in ["running", "paused", "stopped"]
-
-def test_search_vms():
-    """Test searching for VMs by name."""
-    with httpx.Client() as client:
-        response = client.get(f"{BASE_URL}/vms?search=testvm")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)

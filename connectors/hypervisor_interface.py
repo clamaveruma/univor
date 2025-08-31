@@ -1,147 +1,73 @@
+from typing import Protocol, Any, List
+from box import Box  
 
-from typing import Protocol, Any, List, Optional
-
-class VMConfig(Protocol):
+class VMConfig(Box):
     """
-    Generic interface for a VM configuration object.
-    Each backend (VMware, Proxmox, KVM, etc.) should implement this interface for its own config class.
+    Protocol for VM configuration objects. Must be compatible with Box (dot-access dict).
+    See: https://box-python-sdk.readthedocs.io/en/latest/ for Box documentation.
+    Implementations should inherit from Box or provide equivalent attribute and dict access.
+    Examples:
+        config = MyVMConfig(cpu=2, memory=4096, name='testvm')
+        print(config.cpu)         # 2
+        print(config['memory'])  # 4096
+        config.disk = 50
+        config['net'] = 'eth0'
     """
-    def get(self, key: str) -> Any:
-        """Get a configuration value by key."""
-        ...
-
-    def set(self, key: str, value: Any) -> None:
-        """Set a configuration value by key."""
-        ...
-
-    def as_dict(self) -> dict:
-        """Return the configuration as a dictionary."""
-        ...
-
-    # Add more generic config methods as needed
-
+   
 
 class VMInterface(Protocol):
     """
-    Interface (Protocol) for a Virtual Machine (VM) object.
-    
-    This is an abstract interface class. It must be subclassed to implement a specific VM representation
-    for a real hypervisor or a mock/test environment.
-    
+    Protocol for a Virtual Machine (VM) object.
     Implementations should provide properties and methods to represent and manage a VM.
-    Do not instantiate this class directly.
     """
-    
     @property
-    def id(self) -> str:
-        """Unique identifier for the VM."""
-        ...
-
+    def id(self) -> str: ...
     @property
-    def name(self) -> str:
-        """Name of the VM."""
-        ...
-
+    def name(self) -> str: ...
     @property
-    def status(self) -> str:
-        """Current status of the VM (e.g., running, stopped, paused)."""
-        ...
-
+    def status(self) -> str: ...
     @property
-    def config(self) -> VMConfig:
-        """The configuration object for this VM."""
-        ...
-
-    def start(self) -> None:
-        """Start this virtual machine."""
-        ...
-
-    def stop(self) -> None:
-        """Stop this virtual machine."""
-        ...
-
-    def pause(self) -> None:
-        """Pause this virtual machine."""
-        ...
-
-    def resume(self) -> None:
-        """Resume this virtual machine."""
-        ...
-
-    def delete(self) -> None:
-        """Delete this virtual machine."""
-        ...
-
-    def rename(self, new_name: str) -> None:
-        """Rename this virtual machine."""
-        ...
-
+    def config(self) -> VMConfig: ...
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+    def pause(self) -> None: ...
+    def resume(self) -> None: ...
+    def delete(self) -> None: ...
+    def rename(self, new_name: str) -> None: ...
     def reconfigure(self, config: VMConfig) -> None:
-        """Apply a new configuration to this VM."""
+        """
+        Replace the entire configuration of the VM with the provided config.
+        All previous settings are lost unless included in the new config.
+        """
         ...
 
-    def list_devices(self) -> List[Any]:
-        """List all devices attached to this VM."""
+    def update_config(self, config: VMConfig) -> None:
+        """
+        Merge the provided config with the current config, overwriting only the specified fields.
+        Unspecified fields remain unchanged.
+        """
         ...
+    def list_devices(self) -> List[Any]: ...
+
 
 class HypervisorConnector(Protocol):
+   
     """
-    Interface (Protocol) for hypervisor connectors.
-    
-    This is an abstract interface class. It must be subclassed to implement a specific real hypervisor connector
-    (e.g., VMware, mock hypervisor, etc.).
-    
-    Implementations must provide synchronous methods to manage virtual machines (VMs)
-    and interact with the hypervisor. This interface is designed for extensibility and clarity.
-    
-    Do not instantiate this class directly.
-    
-    Core operations:
-        - Create a new VM
-        - Clone an existing VM
-    
-    Objects managed:
-        - Hypervisor
-        - Virtual Machine (VM)
-    
-    Note:
-        - Authentication is not included at this stage.
-        - All methods are synchronous.
-        - Extend this interface as needed for additional operations or objects.
+    Protocol for hypervisor connectors.
+    Implementations must provide methods to manage VMs and interact with the hypervisor.
     """
 
-    def create_vm(self, hypervisor: Any, vm_spec: dict) -> VMInterface:
+    def __init__(self, host: str, user: str, password: str, **kwargs): ...
+    def list_vms(self) -> List["VMInterface"]: ...
+    def get_vm(self, vm_id: str) -> "VMInterface": ...
+    def create_vm(self, config: VMConfig) -> "VMInterface": ...
+    def clone_vm(self, source_vm: "VMInterface", config: VMConfig) -> "VMInterface": ...
+    def search_vm(self, query: str) -> List["VMInterface"]: ...
+    @property
+    def info(self) -> Box:
         """
-        Create a new virtual machine on the specified hypervisor.
-        Args:
-            hypervisor: The hypervisor instance or identifier.
-            vm_spec: A dictionary with VM configuration parameters.
-        Returns:
-            The created VM object or identifier.
-        """
-        ...
-
-    def clone_vm(self, hypervisor: Any, source_vm: VMInterface, clone_spec: dict) -> VMInterface:
-        """
-        Clone an existing virtual machine.
-        Args:
-            hypervisor: The hypervisor instance or identifier.
-            source_vm: The VM to be cloned.
-            clone_spec: A dictionary with clone configuration parameters.
-        Returns:
-            The cloned VM object or identifier.
-        """
-        ...
-
-    # VM lifecycle operations are now handled by the VMInterface itself.
-    def search_vm(self, hypervisor: Any, query: str) -> List[VMInterface]:
-        """
-        Search for VMs matching a query string (e.g., by name or other criteria).
-        Args:
-            hypervisor: The hypervisor instance or identifier.
-            query: The search string or pattern.
-        Returns:
-            A list of matching VMInterface objects.
+        Returns information about the connector,
+          such as type, version, and capabilities, as a Box.
         """
         ...
         

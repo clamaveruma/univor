@@ -1,30 +1,70 @@
 """
 mock_hypervisor.daemon
 ----------------------
-This module implements a mock hypervisor REST API using FastAPI. It provides endpoints to create, list, update, delete, clone, and manage the lifecycle of virtual machines (VMs) in an in-memory store. Intended for local development, testing, and demonstration purposes.
+This module implements a mock hypervisor REST API using FastAPI.
+It provides endpoints to create, list, update, delete, clone,
+and manage the lifecycle of virtual machines (VMs)
+in an in-memory store. Intended for local development, testing,
+and demonstration purposes.
 """
-import typer
-import typer
+import threading
 import uvicorn
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
+from fastapi import Request
+from common.app_setup import setup_logging
 
-app = FastAPI()
-
-
+# Set up logging for the daemon
+logger = setup_logging(app_name="univor", daemon=True)
+# Store the server shutdown function
+shutdown_event = threading.Event()
 
 
 # In-memory mock VM store
-mock_vms = {}
-mock_id = 1
+mock_vms: dict[str, dict] = {}
+
+
+app = FastAPI()
+
+def generate_vm_id(supplied_id: str | None = None) -> str:
+    """
+    Generate a unique VM id. If supplied_id is given, use it if not taken, otherwise add _1, _2, etc.
+    If not supplied, generate VM1, VM2, ...
+    """
+    existing_ids = set(mock_vms.keys())
+    if supplied_id:
+        base_id = supplied_id
+        candidate = base_id
+        i = 1
+        while candidate in existing_ids:
+            candidate = f"{base_id}_{i}"
+            i += 1
+        return candidate
+    else:
+        i = 1
+        while True:
+            candidate = f"VM{i}"
+            if candidate not in existing_ids:
+                return candidate
+            i += 1
+
+@app.post("/shutdown")
+def shutdown():
+    """Shutdown the server gracefully."""
+    logger.info("Shutdown requested via /shutdown endpoint.")
+    shutdown_event.set()
+    return {"message": "Server shutting down"}
+
 
 @app.post("/vms", status_code=201)
 def create_vm(vm: dict):
     """Create a new virtual machine (VM) and return its details."""
-    global mock_id
-    vm["id"] = str(mock_id)
-    mock_vms[vm["id"]] = vm
-    mock_id += 1
+    supplied_id = vm.get("id")
+    vm_id = generate_vm_id(supplied_id)
+    vm["id"] = vm_id
+    vm["status"] = "stopped"  # New VMs start as stopped
+    mock_vms[vm_id] = vm
+    logger.info(f"Created VM: {vm}")
     return vm
 
 @app.get("/vms")
@@ -62,15 +102,17 @@ def delete_vm(vm_id: str):
 @app.post("/vms/{vm_id}/clone", status_code=201)
 def clone_vm(vm_id: str, clone: dict):
     """Clone an existing VM, assigning a new ID and (optionally) a new name."""
-    global mock_id
     orig = mock_vms.get(vm_id)
     if not orig:
         return JSONResponse(status_code=404, content={"error": "VM not found"})
     new_vm = orig.copy()
-    new_vm["id"] = str(mock_id)
+    supplied_id = clone.get("id")
+    new_vm_id = generate_vm_id(supplied_id)
+    new_vm["id"] = new_vm_id
     new_vm["name"] = clone.get("name", f"clone_{orig['name']}")
-    mock_vms[new_vm["id"]] = new_vm
-    mock_id += 1
+    new_vm["status"] = "stopped"  # Cloned VMs also start as stopped
+    mock_vms[new_vm_id] = new_vm
+    logger.info(f"Cloned VM: {new_vm}")
     return new_vm
 
 @app.post("/vms/{vm_id}/{action}")
@@ -81,17 +123,50 @@ def vm_lifecycle(vm_id: str, action: str):
         return JSONResponse(status_code=404, content={"error": "VM not found"})
     if action not in ["start", "stop", "pause", "resume"]:
         return JSONResponse(status_code=400, content={"error": "Invalid action"})
-    vm["status"] = {
+    new_status = {
         "start": "running",
         "stop": "stopped",
         "pause": "paused",
         "resume": "running"
     }[action]
+    vm["status"] = new_status
+    logger.info(f"VM {vm_id} lifecycle action '{action}' -> status '{new_status}'")
     return vm
+    #TODO: implement lifecycle logic: FSM
+
+import socket
+import argparse
 
 def main():
-    """Run the FastAPI app using Uvicorn on localhost:8000."""
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    """Run the FastAPI app using Uvicorn on localhost, reporting the actual port used."""
+    parser = argparse.ArgumentParser(description="Mock Hypervisor Daemon")
+    parser.add_argument('--port', type=int, default=None, help='Port to run the server on (auto if not set)')
+    args = parser.parse_args()
+
+    port = args.port
+    if port is None:
+        # Bind to port 0 to get a free port, then close and reuse
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('127.0.0.1', 0))
+            port = s.getsockname()[1]
+        print(f"[MOCKDAEMON] Selected port: {port}", flush=True)
+    else:
+        print(f"[MOCKDAEMON] Using port: {port}", flush=True)
+    # Run uvicorn in a thread so we can trigger shutdown
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
+    server = uvicorn.Server(config)
+    def run_server():
+        # This will block until should_exit is set
+        server.run()
+    t = threading.Thread(target=run_server)
+    t.start()
+    # Wait for shutdown event
+    try:
+        shutdown_event.wait()
+    except KeyboardInterrupt:
+        pass
+    server.should_exit = True
+    t.join()
 
 if __name__ == "__main__":
     main()

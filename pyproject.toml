@@ -2,7 +2,8 @@
 mockvisor = "mock_hypervisor.cli:app"
 mockvisord = "mock_hypervisor.daemon:main"
 [tool.setuptools]
-packages = ["mock_hypervisor"]
+packages = ["mock_hypervisor","common"]
+
 [project]
 name = "univor"
 version = "0.1.0"
@@ -20,7 +21,8 @@ dependencies = [
     "psutil",
     "types-psutil",
     "pydantic",
-    "rich"
+    "rich",
+    "python-box[all] ~=7.0"
 ]
 
 [tool.pytest.ini_options]

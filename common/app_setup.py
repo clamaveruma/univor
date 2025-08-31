@@ -77,6 +77,7 @@ def monkeypatch_print():
             typer.echo(message, nl=False)
     builtins.print = print_to_typer     # monkeypatch print
 
+
 def print_and_log(message: str):
     """
     Print to console (via print) and log as info.
