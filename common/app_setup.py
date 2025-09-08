@@ -1,15 +1,12 @@
 """
-common/app_setup.py
---------------------
 Reusable logging and print setup for all parts of the project.
 
-Usage:
-    from common.app_setup import setup_logging, set_print_logger, monkeypatch_print, print_and_log, print_error
-    logger = setup_logging(app_name="univor", daemon=False)
-    set_print_logger(logger)
-    monkeypatch_print()
-    print_and_log("Info message")
-    print_error("Error message")
+Functions:
+    setup_logging      - Configure and return a logger.
+    set_print_logger   - Set the logger for print_and_log and print_error.
+    monkeypatch_print  - Replace built-in print with rich print.
+    print_and_log      - Print and log an info message.
+    print_error        - Print and log an error message.
 """
 
 import logging
@@ -17,13 +14,13 @@ import logging.handlers
 import os
 from typing import Optional
 import builtins
-import typer
+from rich import print as rich_print
 import sys
 
 # Module-level variable to hold the logger for print_and_log and print_error
-_monkeypatch_logger = None
+_print_logger = None
 
-def setup_logging(app_name: str = "univor", daemon: bool = False, loglevel: int = logging.INFO, logfile: Optional[str] = None):
+def setup_logging(app_name: str = "univor", daemon: bool = False, loglevel: int = logging.INFO, logfile: Optional[str] = None) -> logging.Logger:
     """
     Set up logging for the application.
     - If daemon=True, logs to syslog (Linux only).
@@ -52,6 +49,7 @@ def setup_logging(app_name: str = "univor", daemon: bool = False, loglevel: int 
         handler = logging.FileHandler(logfile)
     handler.setFormatter(formatter)
     logger.addHandler(handler)
+    set_print_logger(logger)
     return logger
 
 def set_print_logger(logger: logging.Logger):
@@ -59,37 +57,30 @@ def set_print_logger(logger: logging.Logger):
     Set the logger to be used by print_and_log and print_error.
     Call this after setting up logging in your app.
     """
-    global _monkeypatch_logger
-    _monkeypatch_logger = logger
+    global _print_logger
+    _print_logger = logger
 
 def monkeypatch_print():
     """
-    Monkeypatch built-in print to use typer.echo only (no logging).
+    Monkeypatch built-in print to use rich.print for all output (no logging).
     """
-    def print_to_typer(*args, **kwargs):
-        sep = kwargs.get('sep', ' ')
-        end = kwargs.get('end', '\n')
-        file = kwargs.get('file', sys.stdout)
-        message = sep.join(str(arg) for arg in args) + end
-        if file == sys.stderr:
-            typer.echo(message, err=True, nl=False)
-        else:
-            typer.echo(message, nl=False)
-    builtins.print = print_to_typer     # monkeypatch print
+    def print_to_rich(*args, **kwargs):
+        rich_print(*args, **kwargs)
+    builtins.print = print_to_rich  # monkeypatch print
 
 
-def print_and_log(message: str):
+def print_and_log(message: str, **kwargs):
     """
     Print to console (via print) and log as info.
     """
-    print(message)
-    if _monkeypatch_logger is not None:
-        _monkeypatch_logger.info(message)
+    print(message, **kwargs)
+    if _print_logger is not None:
+        _print_logger.info(message)
 
-def print_error(message: str):
+def print_error(message: str, **kwargs):
     """
     Print and log an error message (stderr and error level), using the logger set by set_print_logger.
     """
-    typer.echo(message, err=True)
-    if _monkeypatch_logger is not None:
-        _monkeypatch_logger.error(message)
+    print(f'[bold red]{message}[/bold red]', file=sys.stderr, **kwargs)
+    if _print_logger is not None:
+        _print_logger.error(message)

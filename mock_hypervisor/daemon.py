@@ -12,10 +12,11 @@ import uvicorn
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 from fastapi import Request
-from common.app_setup import setup_logging
+from common.app_setup import print_error, setup_logging, monkeypatch_print
 
 # Set up logging for the daemon
 logger = setup_logging(app_name="univor", daemon=True)
+monkeypatch_print()
 # Store the server shutdown function
 shutdown_event = threading.Event()
 
@@ -135,15 +136,13 @@ def vm_lifecycle(vm_id: str, action: str):
     #TODO: implement lifecycle logic: FSM
 
 import socket
-import argparse
+import typer
 
-def main():
+app_cli = typer.Typer()
+
+@app_cli.command()
+def run(port: int = typer.Option(None, help="Port to run the server on (auto if not set)")):
     """Run the FastAPI app using Uvicorn on localhost, reporting the actual port used."""
-    parser = argparse.ArgumentParser(description="Mock Hypervisor Daemon")
-    parser.add_argument('--port', type=int, default=None, help='Port to run the server on (auto if not set)')
-    args = parser.parse_args()
-
-    port = args.port
     if port is None:
         # Bind to port 0 to get a free port, then close and reuse
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -151,13 +150,23 @@ def main():
             port = s.getsockname()[1]
         print(f"[MOCKDAEMON] Selected port: {port}", flush=True)
     else:
+        # Check if port is available
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', port))
+            except OSError:
+                print_error(f"[MOCKDAEMON] ERROR: Port {port} is already in use.", flush=True)
+                import sys
+                sys.exit(98)  # 98 = EADDRINUSE
         print(f"[MOCKDAEMON] Using port: {port}", flush=True)
     # Run uvicorn in a thread so we can trigger shutdown
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
     server = uvicorn.Server(config)
+
     def run_server():
         # This will block until should_exit is set
         server.run()
+
     t = threading.Thread(target=run_server)
     t.start()
     # Wait for shutdown event
@@ -169,4 +178,4 @@ def main():
     t.join()
 
 if __name__ == "__main__":
-    main()
+    app_cli()

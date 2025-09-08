@@ -1,5 +1,5 @@
 [project.scripts]
-mockvisor = "mock_hypervisor.cli:app"
+mockvisor = "mock_hypervisor.launcher:app"
 mockvisord = "mock_hypervisor.daemon:main"
 [tool.setuptools]
 packages = ["mock_hypervisor","common"]
@@ -17,7 +17,7 @@ dependencies = [
     "uvicorn[standard]",
     "pytest",
     "httpx",
-    "typer[all]",
+    "typer",
     "psutil",
     "types-psutil",
     "pydantic",

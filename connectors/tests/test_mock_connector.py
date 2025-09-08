@@ -3,29 +3,46 @@ import time
 import random
 import socket
 import pytest
-from connectors.mock_hypervisor_connector import MockHypervisorConnector
 
-def get_free_port():
-    s = socket.socket()
-    s.bind(('', 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
+from connectors.mock_hypervisor_connector import MockHypervisorConnector
 
 @pytest.fixture(scope="module")
 def mock_hypervisor_servers():
-    ports = [get_free_port(), get_free_port()]
     procs = []
-    for port in ports:
-        proc = subprocess.Popen([
-            'mockvisord',
-            '--port', str(port),
-            '--no-daemon',
-        ])
+    ports = []
+    for _ in range(2):
+        proc = subprocess.Popen(
+            [
+                'mockvisor',
+                'start',
+                '--port', '0',
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        # Read lines until we find the port info
+        port = None
+        for line in iter(proc.stdout.readline, ''):
+            if 'Listening on port' in line:
+                # Example: 'Listening on port 12345\n'
+                port = int(line.strip().split()[-1])
+                break
+        if port is None:
+            proc.terminate()
+            raise RuntimeError('Could not determine port for mockvisor')
+        ports.append(port)
         procs.append(proc)
-    time.sleep(2)  # Give servers time to start
+    time.sleep(1)  # Give servers a moment to finish startup
     yield ports
     for proc in procs:
+        stop_proc = subprocess.Popen([
+            'mockvisor',
+            'stop',
+            # Optionally, you may need to pass an identifier or port
+        ])
+        stop_proc.wait()
         proc.terminate()
         proc.wait()
 
