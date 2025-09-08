@@ -10,13 +10,12 @@ Universal Virtual Machines Orchestator
 
 
 
-## 🛠️ Installation
+## 🛠️ Installation of developement environment
 
-Clone the repository and set up the virtual environment:
+### 🚀 Getting Started
+
+To set up the development environment, simply run this command in your terminal:
 
 ```bash
-git clone https://github.com/your-username/project-name.git
-cd project-name
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+git clone https://github.com/clamaveruma/univor.git && cd your-repo && chmod +x setup-dev.sh && ./setup-dev.sh
+
