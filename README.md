@@ -17,5 +17,5 @@ Universal Virtual Machines Orchestator
 To set up the development environment, simply run this command in your terminal:
 
 ```bash
-git clone https://github.com/clamaveruma/univor.git && cd your-repo && chmod +x setup-dev.sh && ./setup-dev.sh
+git clone https://github.com/clamaveruma/univor.git && cd univor && chmod +x setup-dev.sh && ./setup-dev.sh
 
