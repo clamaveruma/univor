@@ -143,7 +143,7 @@ app_cli = typer.Typer()
 @app_cli.command()
 def run(port: int = typer.Option(None, help="Port to run the server on (auto if not set)")):
     """Run the FastAPI app using Uvicorn on localhost, reporting the actual port used."""
-    if port is None:
+    if port is None or port == 0:
         # Bind to port 0 to get a free port, then close and reuse
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('127.0.0.1', 0))
