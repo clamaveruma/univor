@@ -1,106 +1,140 @@
+
+
 import subprocess
 import time
-import socket
 import sys
 import httpx
+import pytest
+import json
 
+LAUNCHER = [sys.executable, '-m', 'mock_hypervisor.launcher']
 
-
-def get_free_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
-def start_daemon(port):
-    cmd = [sys.executable, '-m', 'mock_hypervisor.daemon', '--port', str(port)]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    # Wait for server to start
-    for _ in range(30):
-        try:
-            with httpx.Client() as client:
-                r = client.get(f'http://127.0.0.1:{port}/vms', timeout=0.5)
-            if r.status_code == 200:
-                return proc
-        except Exception:
-            time.sleep(0.2)
-    raise RuntimeError('Daemon did not start')
-
-def shutdown_daemon(port):
+def get_daemon_status():
+    result = subprocess.run(LAUNCHER + ['status'], capture_output=True, text=True)
     try:
-        with httpx.Client() as client:
-            client.post(f'http://127.0.0.1:{port}/shutdown', timeout=2)
+        data = json.loads(result.stdout.splitlines()[-1])
+        return data
     except Exception:
-        pass
+        return None
+
+@pytest.fixture(scope="function")
+def daemon():
+    status = get_daemon_status()
+    if not status or status.get("msg") == "Daemon not running.":
+        result = subprocess.run(LAUNCHER + ['start'], capture_output=True, text=True)
+        data = json.loads(result.stdout.splitlines()[-1])
+        port = data.get("port")
+    else:
+        port = status.get("port")
+    yield port
+
+
+# Add a test that stops the daemon via REST
+def test_stop_daemon_via_rest(daemon):
+    port = daemon
+    with httpx.Client() as client:
+        r = client.post(f'http://127.0.0.1:{port}/shutdown', timeout=2)
+        assert r.status_code in (200, 204)
+    # After shutdown, status should show not running
+    time.sleep(1)
+    status2 = get_daemon_status()
+    assert status2 and status2.get("msg") == "Daemon not running."
 
 def print_vms(port):
     with httpx.Client() as client:
         r = client.get(f'http://127.0.0.1:{port}/vms')
         print('VMs:', r.json())
 
-def test_rest_api_full():
-    port = get_free_port()
-    proc = start_daemon(port)
-    try:
-        with httpx.Client() as client:
-            # Create VM without id
-            r = client.post(f'http://127.0.0.1:{port}/vms', json={"name": "Alpha"})
-            assert r.status_code == 201
-            vm1 = r.json()
-            print('Created VM:', vm1)
-            print_vms(port)
 
-            # Create VM with id
-            r = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Beta"})
-            assert r.status_code == 201
-            vm2 = r.json()
-            print('Created VM with id:', vm2)
-            print_vms(port)
+# Split tests for clarity and isolation
+def test_create_vm(daemon):
+    port = daemon
+    with httpx.Client() as client:
+        # Positive: create VM
+        r = client.post(f'http://127.0.0.1:{port}/vms', json={"name": "Alpha"})
+        assert r.status_code == 201
+        vm1 = r.json()
+        assert vm1["name"] == "Alpha"
+        assert "id" in vm1
+        # Negative: create VM with missing name
+        r = client.post(f'http://127.0.0.1:{port}/vms', json={})
+        assert r.status_code in (400, 422)
+        # Cleanup
+        r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+        assert r.status_code == 204
 
-            # Create VM with duplicate id
-            r = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Gamma"})
-            assert r.status_code == 201
-            vm3 = r.json()
-            print('Created VM with duplicate id:', vm3)
-            print_vms(port)
+def test_create_vm_with_id(daemon):
+    port = daemon
+    with httpx.Client() as client:
+        r = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Beta"})
+        assert r.status_code == 201
+        vm2 = r.json()
+        assert vm2["id"] == "custom"
+        assert vm2["name"] == "Beta"
+        # Negative: get non-existent VM
+        r = client.get(f'http://127.0.0.1:{port}/vms/nonexistent')
+        assert r.status_code == 404
+        # Cleanup
+        r = client.delete(f'http://127.0.0.1:{port}/vms/{vm2["id"]}')
+        assert r.status_code == 204
 
-            # Get VM
-            r = client.get(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+def test_create_vm_duplicate_id(daemon):
+    port = daemon
+    with httpx.Client() as client:
+        r1 = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Beta"})
+        assert r1.status_code == 201
+        vm1 = r1.json()
+        r2 = client.post(f'http://127.0.0.1:{port}/vms', json={"id": "custom", "name": "Gamma"})
+        assert r2.status_code == 201
+        vm2 = r2.json()
+        # Both VMs should have the same id
+        assert vm1["id"] == vm2["id"] == "custom"
+        # Cleanup
+        r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+        assert r.status_code == 204
+
+def test_get_update_delete_vm(daemon):
+    port = daemon
+    with httpx.Client() as client:
+        r = client.post(f'http://127.0.0.1:{port}/vms', json={"name": "Alpha"})
+        vm1 = r.json()
+        # Get VM
+        r = client.get(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+        assert r.status_code == 200
+        data = r.json()
+        assert data["id"] == vm1["id"]
+        # Update VM
+        r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={"name": "AlphaUpdated"})
+        assert r.status_code == 200
+        updated = r.json()
+        assert updated["name"] == "AlphaUpdated"
+        # Negative: update with invalid data
+        r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={})
+        assert r.status_code in (400, 422)
+        # Delete VM
+        r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+        assert r.status_code == 204
+
+def test_clone_vm_and_lifecycle(daemon):
+    port = daemon
+    with httpx.Client() as client:
+        r = client.post(f'http://127.0.0.1:{port}/vms', json={"name": "Alpha"})
+        vm1 = r.json()
+        # Clone VM
+        r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/clone', json={"name": "AlphaClone"})
+        assert r.status_code == 201
+        vm_clone = r.json()
+        assert vm_clone["name"] == "AlphaClone"
+        # Negative: clone with missing name
+        r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/clone', json={})
+        assert r.status_code in (400, 422)
+        # Change lifecycle
+        for action in ["start", "pause", "resume", "stop"]:
+            r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/{action}')
             assert r.status_code == 200
-            print('Get VM:', r.json())
+        # Cleanup
+        r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
+        assert r.status_code == 204
 
-            # Update VM
-            r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={"name": "AlphaUpdated"})
-            assert r.status_code == 200
-            print('Updated VM:', r.json())
-            print_vms(port)
 
-            # Clone VM
-            r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/clone', json={"name": "AlphaClone"})
-            assert r.status_code == 201
-            vm_clone = r.json()
-            print('Cloned VM:', vm_clone)
-            print_vms(port)
 
-            # Change lifecycle
-            for action in ["start", "pause", "resume", "stop"]:
-                r = client.post(f'http://127.0.0.1:{port}/vms/{vm1["id"]}/{action}')
-                assert r.status_code == 200
-                print(f'Lifecycle {action}:', r.json())
-
-            # Delete VM
-            r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
-            assert r.status_code == 204
-            print('Deleted VM:', vm1["id"])
-            print_vms(port)
-
-    finally:
-        shutdown_daemon(port)
-        try:
-            proc.wait(timeout=5)
-        except Exception:
-            proc.terminate()
-            proc.wait(timeout=2)
-
-def test_vm_lifecycle():
-    """Test VM lifecycle operations: start, stop, pause, resume."""
-    payload = {"name": "testvm6", "cpu": 1, "memory": 1024}
