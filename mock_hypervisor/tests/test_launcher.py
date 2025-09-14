@@ -1,6 +1,5 @@
 
 
-
 import os
 import time
 import json
@@ -39,8 +38,10 @@ def test_launcher_start_stop_status_kill():
     result = runner.invoke(app, ['stop'])
     assert result.exit_code == 0, f"stop failed: {result.output}"
     time.sleep(1)
-    # Check process is gone
-    assert not psutil.pid_exists(pid)
+    # Check process is gone or zombie
+    if psutil.pid_exists(pid):
+        proc = psutil.Process(pid)
+        assert proc.status() == psutil.STATUS_ZOMBIE, f"Process {pid} should be zombie if not gone, got {proc.status()}"
 
     # Status should report not running
     result = runner.invoke(app, ['status'])
@@ -142,3 +143,27 @@ def test_stop_kill_when_not_running():
     assert result.exit_code != 0 or "not running" in result.output.lower()
     result = runner.invoke(app, ['kill'])
     assert result.exit_code in (0, 1)
+
+def test_invalid_command():
+    # Test an invalid command
+    result = runner.invoke(app, ['notacommand'])
+    assert result.exit_code != 0
+    assert 'No such command' in result.output or 'Usage' in result.output
+
+def test_invalid_argument():
+    # Test invalid argument for start (non-integer port)
+    result = runner.invoke(app, ['start', '--port', 'notaport'])
+    assert result.exit_code != 0
+    assert 'Invalid value' in result.output or 'Error' in result.output
+
+def test_help_output():
+    # Test help output for main app
+    result = runner.invoke(app, ['--help'])
+    assert result.exit_code == 0
+    assert 'Usage' in result.output and 'start' in result.output and 'stop' in result.output
+
+    # Test help output for start command
+    result = runner.invoke(app, ['start', '--help'])
+    assert result.exit_code == 0
+    assert 'Usage' in result.output and 'port' in result.output
+

@@ -26,8 +26,10 @@ app = typer.Typer(add_completion=False, help="Manage the mock_hypervisor daemon.
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     if ctx.invoked_subcommand is None:
-        ctx.invoke(status)
-        print("[bold yellow]Tip:[/bold yellow] Use [green]--help[/green] to see all available commands.")
+        try:
+            ctx.invoke(status)
+        finally:
+            print("[bold yellow]Tip:[/bold yellow] Use [green]--help[/green] to see all available commands.")
 
 def _start_daemon(port=None):
     """Start the daemon, optionally with a specific port. Returns (pid, port)."""
@@ -73,12 +75,36 @@ def stop():
         print_error("Daemon not running.")
         raise typer.Exit(1)
     try:
+        status_after = None
+        try:
+            proc = psutil.Process(pid)
+            status_before = proc.status()
+            print_and_log(json.dumps({"debug": f"Process {pid} status before SIGTERM: {status_before}"}))
+        except Exception as e:
+            print_and_log(json.dumps({"debug": f"Could not get process status before SIGTERM: {e}"}))
+
         os.kill(pid, signal.SIGTERM)
+        print_and_log(json.dumps({"debug": f"Sent SIGTERM to process {pid}"}))
         time.sleep(1)
+
+        try:
+            proc = psutil.Process(pid)
+            status_after = proc.status()
+            print_and_log(json.dumps({"debug": f"Process {pid} status after SIGTERM: {status_after}"}))
+        except psutil.NoSuchProcess:
+            print_and_log(json.dumps({"debug": f"Process {pid} does not exist after SIGTERM (stopped)"}))
+            print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon with PID {pid}"}))
+            return
+        except Exception as e:
+            print_and_log(json.dumps({"debug": f"Could not get process status after SIGTERM: {e}"}))
+
         if not _pid_running(pid):
             print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon with PID {pid}"}))
+        elif status_after == psutil.STATUS_ZOMBIE:
+            print_and_log(json.dumps({"debug": f"Process {pid} is a zombie and will be reaped by its parent."}))
+            print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon with PID {pid} (zombie)"}))
         else:
-            print_error(f"Failed to stop daemon with PID {pid}.")
+            print_error(f"Failed to stop daemon with PID {pid}. Status: {status_after if status_after is not None else 'unknown'}")
             raise typer.Exit(1)
     except Exception as e:
         print_error(f"Error stopping daemon: {e}")
@@ -108,10 +134,10 @@ def status():
     """Show the status of the mock_hypervisor daemon by finding its process."""
     pid = _find_daemon_pid()
     if not pid:
-        print_and_log(json.dumps({"returncode": 1, "msg": "Daemon not running."}))
-        raise typer.Exit(1)
-    port = _get_listening_port_of_pid(pid)
-    print_and_log(json.dumps({"returncode": 0, "msg": f"Daemon running with PID {pid}", "pid": pid, "port": port or "unknown"}))
+        print_and_log(json.dumps({"returncode": 0, "msg": "Daemon not running."}))
+    else:
+        port = _get_listening_port_of_pid(pid)
+        print_and_log(json.dumps({"returncode": 0, "msg": f"Daemon running with PID {pid}", "pid": pid, "port": port or "unknown"}))
 
 def _pid_running(pid):
     try:
