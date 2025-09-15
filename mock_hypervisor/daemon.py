@@ -12,7 +12,7 @@ import uvicorn
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 from fastapi import Request
-from common.app_setup import print_error, setup_logging, monkeypatch_print
+from common.app_setup import print_error, setup_logging, monkeypatch_print, print_and_log
 
 # Set up logging for the daemon
 logger = setup_logging(app_name="univor", daemon=True)
@@ -88,14 +88,32 @@ def get_vm(vm_id: str):
 @app.put("/vms/{vm_id}")
 def update_vm(vm_id: str, update: dict):
     """Update an existing VM's details by its ID."""
-    vm = mock_vms.get(vm_id)
-    if not vm:
-        return JSONResponse(status_code=404, content={"error": "VM not found"})
-    # Validate update: 'name' is required and must be a non-empty string
-    if "name" not in update or not isinstance(update["name"], str) or not update["name"].strip():
-        return JSONResponse(status_code=422, content={"error": "Missing or invalid 'name' field in update"})
-    vm.update(update)
-    return vm
+    try:
+        print_and_log(f"[DEBUG][UNIQUE-TEST] update_vm CALLED for vm_id={vm_id} with update={update!r}")
+        vm = mock_vms.get(vm_id)
+        if not vm:
+            print_and_log(f"[DEBUG] VM not found: {vm_id}")
+            return JSONResponse(status_code=404, content={"error": "VM not found"})
+        # If 'name' is present, it must be a non-empty string
+        if "name" in update:
+            if not isinstance(update["name"], str) or not update["name"].strip():
+                print_and_log(f"[DEBUG] Invalid 'name' in update: {update['name']!r}")
+                return JSONResponse(status_code=422, content={"error": "Missing or invalid 'name' field in update"})
+        print_and_log(f"[DEBUG] Before update: {vm!r}")
+        vm.update(update)
+        print_and_log(f"[DEBUG] After update: {vm!r}")
+        print_and_log(f"[DEBUG] Returning JSONResponse(content=dict(vm)): type(vm)={type(vm)}, keys={list(vm.keys())}")
+        return JSONResponse(content=dict(vm))
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[EXPLICIT ERROR] update_vm exception: {e}\nTraceback:\n{tb}")
+        print_and_log(f"[ERROR] Exception in update_vm: {e}\nTraceback:\n{tb}")
+        # Return the error and traceback in the response for debugging
+        return JSONResponse(status_code=500, content={
+            "error": str(e),
+            "traceback": tb
+        })
 
 @app.delete("/vms/{vm_id}", status_code=204)
 def delete_vm(vm_id: str):

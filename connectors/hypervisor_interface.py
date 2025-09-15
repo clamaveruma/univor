@@ -20,6 +20,9 @@ class VMInterface(Protocol):
     Protocol for a Virtual Machine (VM) object.
     Implementations should provide properties and methods to represent and manage a VM.
     """
+    def __init__(self, config: VMConfig, connector: "HypervisorConnector"):
+        ...
+
     @property
     def id(self) -> str: ...
     @property
@@ -51,13 +54,17 @@ class VMInterface(Protocol):
 
 
 class HypervisorConnector(Protocol):
-   
     """
     Protocol for hypervisor connectors.
     Implementations must provide methods to manage VMs and interact with the hypervisor.
     """
+    host: str
+    port: int
+    user: str
+    base_url: str
+    # The above variables must be defined as instance attributes (not properties) in implementations.
 
-    def __init__(self, host: str, user: str, password: str, **kwargs): ...
+    def __init__(self, host: str, port: int, user: str, password: str, **kwargs): ...
     def list_vms(self) -> List["VMInterface"]: ...
     def get_vm(self, vm_id: str) -> "VMInterface": ...
     def create_vm(self, config: VMConfig) -> "VMInterface": ...
@@ -70,4 +77,5 @@ class HypervisorConnector(Protocol):
           such as type, version, and capabilities, as a Box.
         """
         ...
-        
+
+   
