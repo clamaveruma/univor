@@ -46,12 +46,13 @@ def _start_daemon(port=None):
         line = proc.stdout.readline()
         if not line:
             break
-        if "[MOCKDAEMON] Selected port:" in line or "[MOCKDAEMON] Using port:" in line:
-            try:
-                selected_port = int(line.strip().split(":")[-1])
-            except Exception:
-                selected_port = None
-            break
+        try:
+            msg = json.loads(line)
+            if msg.get("event") in ("port_selected", "port_used"):
+                selected_port = int(msg["port"])
+                break
+        except Exception:
+            continue
     time.sleep(0.5)
     if proc.poll() is not None:
         print_error(f"Failed to start daemon. Process exited with code {proc.returncode}.")
@@ -71,88 +72,101 @@ def start(port: int | None = typer.Option(None, help="Port to start the daemon o
     exit_code = 0
     try:
         daemon_pid = _find_daemon_pid()
-        if daemon_pid:
-            msg = "A mock_hypervisor daemon is already running"
-            running_port = _get_listening_port_of_pid(daemon_pid)
-            result = {"returncode": 1, "msg": msg, "pid": daemon_pid, "port": running_port or "unknown"}
-            exit_code = 1
-        else:
-            pid, used_port = _start_daemon(port)
-            result = {"returncode": 0, "msg": "Started daemon", "pid": pid, "port": used_port}
-            exit_code = 0
-    except Exception as e:
-        result = {"returncode": 1, "msg": f"Error: {e}"}
+        msg = "A mock_hypervisor daemon is already running"
+        running_port = _get_listening_port_of_pid(daemon_pid)
+        result = {"returncode": 1, "msg": msg, "pid": daemon_pid, "port": running_port or "unknown"}
         exit_code = 1
+    except psutil.NoSuchProcess:
+        pid, used_port = _start_daemon(port)
+        result = {"returncode": 0, "msg": "Started daemon", "pid": pid, "port": used_port}
+        exit_code = 0
     print(json.dumps(result))
     raise typer.Exit(exit_code)
 
 @app.command()
 def stop():
     """Stop the mock_hypervisor daemon by finding its process."""
+    import httpx
+    import httpx
+    pid = _find_daemon_pid()
+    port = _get_listening_port_of_pid(pid)
+    # Try graceful shutdown
+    if port:
+        try:
+            httpx.post(f"http://127.0.0.1:{port}/shutdown", timeout=2)
+        except Exception:
+            pass
+    time.sleep(2)
+    if not _pid_running(pid):
+        print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via /shutdown"}))
+        return
+    # Fallback to SIGTERM
     try:
-        pid = _find_daemon_pid()
-        if not pid:
-            print(json.dumps({"returncode": 1, "msg": "Daemon not running."}))
-            raise typer.Exit(1)
-        status_after = None
-        try:
-            proc = psutil.Process(pid)
-            status_before = proc.status()
-        except Exception:
-            status_before = None
         os.kill(pid, signal.SIGTERM)
-        time.sleep(1)
-        try:
-            proc = psutil.Process(pid)
-            status_after = proc.status()
-        except psutil.NoSuchProcess:
-            print(json.dumps({"returncode": 0, "msg": f"Stopped daemon with PID {pid}"}))
-            return
-        except Exception:
-            status_after = None
-        if not _pid_running(pid):
-            print(json.dumps({"returncode": 0, "msg": f"Stopped daemon with PID {pid}"}))
-        elif status_after == psutil.STATUS_ZOMBIE:
-            print(json.dumps({"returncode": 0, "msg": f"Stopped daemon with PID {pid} (zombie)"}))
-        else:
-            print(json.dumps({"returncode": 1, "msg": f"Failed to stop daemon with PID {pid}. Status: {status_after if status_after is not None else 'unknown'}"}))
-            raise typer.Exit(1)
-    except Exception as e:
-        print(json.dumps({"returncode": 1, "msg": f"Error stopping daemon: {e}"}))
-        raise typer.Exit(1)
+    except Exception:
+        pass
+    time.sleep(1)
+    if not _pid_running(pid):
+        print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via SIGTERM"}))
+        return
+    print_and_log(json.dumps({"returncode": 1, "msg": f"Failed to stop daemon (PID {pid})"}))
+    raise typer.Exit(1)
 
 @app.command()
 def kill():
     """Forcefully kill the mock_hypervisor daemon by finding its process."""
-    try:
-        pid = _find_daemon_pid()
-        if not pid:
-            print(json.dumps({"returncode": 1, "msg": "Daemon not running."}))
-            raise typer.Exit(1)
-        os.kill(pid, signal.SIGKILL)
-        time.sleep(1)
-        if not _pid_running(pid):
-            print(json.dumps({"returncode": 0, "msg": f"Killed daemon with PID {pid}"}))
-        else:
-            print(json.dumps({"returncode": 1, "msg": f"Failed to kill daemon with PID {pid}."}))
-            raise typer.Exit(1)
-    except Exception as e:
-        print(json.dumps({"returncode": 1, "msg": f"Error killing daemon: {e}"}))
+    pid = _find_daemon_pid()
+    os.kill(pid, signal.SIGKILL)
+    time.sleep(1)
+    if not _pid_running(pid):
+        print_and_log(json.dumps({"returncode": 0, "msg": f"Killed daemon with PID {pid}"}))
+    else:
+        print_and_log(json.dumps({"returncode": 1, "msg": f"Failed to kill daemon with PID {pid}."}))
         raise typer.Exit(1)
+
+
+
+
 
 @app.command()
 def status():
-    """Show the status of the mock_hypervisor daemon by finding its process."""
+    """Show the status of the mock_hypervisor daemon by finding its process and querying the REST API."""
+    import httpx
+    result = {
+        "returncode": 1,
+        "msg": "Daemon not running.",
+        "running": False,
+        "pid": None,
+        "port": None,
+        "api_status": None
+    }
     try:
         pid = _find_daemon_pid()
-        if not pid:
-            print(json.dumps({"returncode": 0, "msg": "Daemon not running.", "running": False, "pid": None, "port": None}))
+        port = _get_listening_port_of_pid(pid) or "unknown"
+        result["pid"] = pid
+        result["port"] = port
+        resp = httpx.get(f"http://127.0.0.1:{port}/status", timeout=2)
+        if resp.status_code == 200:
+            result["api_status"] = resp.json()
+            result["msg"] = f"Daemon running with PID {pid}"
+            result["running"] = True
+            result["returncode"] = 0
         else:
-            port = _get_listening_port_of_pid(pid)
-            print(json.dumps({"returncode": 0, "msg": f"Daemon running with PID {pid}", "running": True, "pid": pid, "port": port or "unknown"}))
+            result["api_status"] = {"error": resp.text}
+            result["msg"] = f"Daemon running with PID {pid}, but REST API error"
+    except psutil.NoSuchProcess:
+        pass
     except Exception as e:
-        print(json.dumps({"returncode": 1, "msg": f"Error: {e}", "running": False, "pid": None, "port": None}))
-        raise typer.Exit(1)
+        result["msg"] = f"Error checking daemon status: {e}"
+        result["api_status"] = {"error": str(e)}
+    print_and_log(json.dumps(result))
+    
+@app.command()
+def show_logs():
+    """
+    Show live logs from syslog filtered by 'univor'.
+    """
+    subprocess.run("sudo tail -f /var/log/syslog | grep --line-buffered 'univor'", shell=True)
 
 def _pid_running(pid):
     try:
@@ -164,12 +178,14 @@ def _pid_running(pid):
 def _find_daemon_pid():
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
-            if proc.info['cmdline'] and 'mock_hypervisor.daemon' in ' '.join(proc.info['cmdline']):
-                return proc.pid
+            if proc.info['cmdline'] and \
+                'mock_hypervisor.daemon' in ' '.join(proc.info['cmdline']):
+                    return proc.pid
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    return None
-
+    logger.debug("Daemon not running.")
+    raise psutil.NoSuchProcess("Daemon not running.")
+    
 def _get_listening_port_of_pid(pid: int | None) -> int | None:
     try:
         proc = psutil.Process(pid)
@@ -181,7 +197,9 @@ def _get_listening_port_of_pid(pid: int | None) -> int | None:
         pass
     return None
 
-setup_logging(app_name="mock_hypervisor_launcher", daemon=False)
+
+# Assign logger globally
+logger = setup_logging(app_name="mock_hypervisor_launcher", daemon=False)
 monkeypatch_print()
 
 if __name__ == "__main__":

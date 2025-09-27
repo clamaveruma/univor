@@ -9,21 +9,20 @@ and demonstration purposes.
 """
 import threading
 import uvicorn
-from fastapi import FastAPI, status
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi import Request
-from common.app_setup import print_error, setup_logging, monkeypatch_print, print_and_log
+import json
+from common.app_setup import setup_logging
 
 # Set up logging for the daemon
 logger = setup_logging(app_name="univor", daemon=True)
-monkeypatch_print()
+
 # Store the server shutdown function
 shutdown_event = threading.Event()
 
-
 # In-memory mock VM store
 mock_vms: dict[str, dict] = {}
-
 
 app = FastAPI()
 
@@ -51,6 +50,11 @@ def shutdown():
     shutdown_event.set()
     return {"message": "Server shutting down"}
 
+@app.get("/status")
+def status():
+    """Health/status endpoint for the mock hypervisor daemon."""
+    logger.info("Status requested via /status endpoint.")
+    return {"status": "ok", "vms": len(mock_vms)}
 
 @app.post("/vms", status_code=201)
 def create_vm(vm: dict):
@@ -73,42 +77,47 @@ def create_vm(vm: dict):
 @app.get("/vms")
 def list_vms(search: str | None = None):
     """List all VMs, or filter by name if 'search' is provided."""
+    logger.info(f"Listing VMs. Search: {search!r}")
     if not search:
         return list(mock_vms.values())
-    return [vm for vm in mock_vms.values() if search in vm["name"]]
+    filtered = [vm for vm in mock_vms.values() if search in vm["name"]]
+    logger.debug(f"Filtered VMs: {filtered}")
+    return filtered
 
 @app.get("/vms/{vm_id}")
 def get_vm(vm_id: str):
     """Retrieve details for a specific VM by its ID."""
+    logger.info(f"Retrieving VM: {vm_id}")
     vm = mock_vms.get(vm_id)
     if not vm:
+        logger.warning(f"VM not found: {vm_id}")
         return JSONResponse(status_code=404, content={"error": "VM not found"})
+    logger.debug(f"VM details: {vm}")
     return vm
 
 @app.put("/vms/{vm_id}")
 def update_vm(vm_id: str, update: dict):
     """Update an existing VM's details by its ID."""
     try:
-        print_and_log(f"[DEBUG][UNIQUE-TEST] update_vm CALLED for vm_id={vm_id} with update={update!r}")
+        logger.debug(f"update_vm CALLED for vm_id={vm_id} with update={update!r}")
         vm = mock_vms.get(vm_id)
         if not vm:
-            print_and_log(f"[DEBUG] VM not found: {vm_id}")
+            logger.debug(f"VM not found: {vm_id}")
             return JSONResponse(status_code=404, content={"error": "VM not found"})
         # If 'name' is present, it must be a non-empty string
         if "name" in update:
             if not isinstance(update["name"], str) or not update["name"].strip():
-                print_and_log(f"[DEBUG] Invalid 'name' in update: {update['name']!r}")
+                logger.debug(f"Invalid 'name' in update: {update['name']!r}")
                 return JSONResponse(status_code=422, content={"error": "Missing or invalid 'name' field in update"})
-        print_and_log(f"[DEBUG] Before update: {vm!r}")
+        logger.debug(f"Before update: {vm!r}")
         vm.update(update)
-        print_and_log(f"[DEBUG] After update: {vm!r}")
-        print_and_log(f"[DEBUG] Returning JSONResponse(content=dict(vm)): type(vm)={type(vm)}, keys={list(vm.keys())}")
+        logger.debug(f"After update: {vm!r}")
+        logger.debug(f"Returning JSONResponse(content=dict(vm)): type(vm)={type(vm)}, keys={list(vm.keys())}")
         return JSONResponse(content=dict(vm))
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        print(f"[EXPLICIT ERROR] update_vm exception: {e}\nTraceback:\n{tb}")
-        print_and_log(f"[ERROR] Exception in update_vm: {e}\nTraceback:\n{tb}")
+        logger.error(f"Exception in update_vm: {e}\nTraceback:\n{tb}")
         # Return the error and traceback in the response for debugging
         return JSONResponse(status_code=500, content={
             "error": str(e),
@@ -118,9 +127,12 @@ def update_vm(vm_id: str, update: dict):
 @app.delete("/vms/{vm_id}", status_code=204)
 def delete_vm(vm_id: str):
     """Delete a VM by its ID."""
+    logger.info(f"Deleting VM: {vm_id}")
     if vm_id in mock_vms:
         del mock_vms[vm_id]
+        logger.info(f"Deleted VM: {vm_id}")
         return JSONResponse(status_code=204, content=None)
+    logger.warning(f"VM not found for deletion: {vm_id}")
     return JSONResponse(status_code=404, content={"error": "VM not found"})
 
 @app.post("/vms/{vm_id}/clone", status_code=201)
@@ -174,17 +186,19 @@ def run(port: int = typer.Option(None, help="Port to run the server on (auto if 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('127.0.0.1', 0))
             port = s.getsockname()[1]
-        print(f"[MOCKDAEMON] Selected port: {port}", flush=True)
+        logger.info(f"Selected port: {port}")
+        print(json.dumps({"event": "port_selected", "port": port}), flush=True)
     else:
         # Check if port is available
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
                 s.bind(('127.0.0.1', port))
             except OSError:
-                print_error(f"[MOCKDAEMON] ERROR: Port {port} is already in use.", flush=True)
+                logger.error(f"ERROR: Port {port} is already in use.")
                 import sys
                 sys.exit(98)  # 98 = EADDRINUSE
-        print(f"[MOCKDAEMON] Using port: {port}", flush=True)
+        logger.info(f"Using port: {port}")
+        print(json.dumps({"event": "port_used", "port": port}), flush=True)
     # Run uvicorn in a thread so we can trigger shutdown
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="info")
     server = uvicorn.Server(config)

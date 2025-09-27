@@ -31,7 +31,8 @@ def setup_logging(app_name: str = "univor", daemon: bool = False, loglevel: int 
     logger.setLevel(loglevel)
     from logging import Handler
     if daemon:
-        formatter = logging.Formatter(f'%(asctime)s %(levelname)s %(process)d [{app_name}] %(message)s')
+        # Remove %(asctime)s to avoid double timestamps in syslog
+        formatter = logging.Formatter(f'%(levelname)s %(process)d [{app_name}] %(message)s')
         try:
             handler: Handler = logging.handlers.SysLogHandler(address='/dev/log')
             print("[DEBUG] SysLogHandler set up for /dev/log", file=sys.stderr)
@@ -63,7 +64,7 @@ def set_print_logger(logger: logging.Logger):
     """
     global _print_logger
     _print_logger = logger
-    print(f"[DEBUG] set_print_logger called: logger={logger!r}", file=sys.stderr)
+    #print(f"[DEBUG] set_print_logger called: logger={logger!r}", file=sys.stderr)
 
 def monkeypatch_print():
     """
@@ -79,10 +80,10 @@ def print_and_log(message: str, **kwargs):
     Print to console (via print) and log as info.
     """
     print(message, **kwargs)
-    print(f"[DEBUG] print_and_log: _print_logger={_print_logger!r}", file=sys.stderr)
+    #print(f"[DEBUG] print_and_log: _print_logger={_print_logger!r}", file=sys.stderr)
     if _print_logger is not None:
         _print_logger.info(message)
-        print(f"[DEBUG] print_and_log: logged '{message}' to logger", file=sys.stderr)
+        #print(f"[DEBUG] print_and_log: logged '{message}' to logger", file=sys.stderr)
 
 def print_error(message: str, **kwargs):
     """

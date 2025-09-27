@@ -1,5 +1,6 @@
 #!/bin/bash
-# Script to ...
+# Script to set up the development environment for the project.
+# call this script from the project root directory, with ./setup-dev.sh
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
@@ -32,7 +33,9 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     # Start VS Code in the current directory
     code .
 else
-    # Instructions to manually activate the venv
-    echo "To activate your development environment, run this command in your terminal:"
+    # activate_venv:
+    source .venv/bin/activate
+    # Instructions to manually activate the venv:
+    echo "If not done, to activate your development environment, run this command in your terminal:"
     echo "source .venv/bin/activate"
 fi
