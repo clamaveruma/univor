@@ -5,9 +5,9 @@ from box import Box
 from connectors.hypervisor_interface import VMConfig, VMInterface, HypervisorConnector
 
 class MockVM(VMInterface):
-    def __init__(self, config: VMConfig, connector: "HypervisorConnector"):
-        self._config = Box(config)
-        self._connector = connector
+    def __init__(self, config: dict | str, hypervisor: "HypervisorConnector"):
+        self._config = VMConfig(config)
+        self.hypervisor = hypervisor
 
     @property
     def id(self) -> str:
@@ -38,24 +38,24 @@ class MockVM(VMInterface):
         self._lifecycle_action("resume")
 
     def delete(self) -> None:
-        url = f"{self._connector.base_url}/vms/{self.id}"
+        url = f"{self.hypervisor.base_url}/vms/{self.id}"
         r = httpx.delete(url)
         r.raise_for_status()
 
     def rename(self, new_name: str) -> None:
-        url = f"{self._connector.base_url}/vms/{self.id}"
+        url = f"{self.hypervisor.base_url}/vms/{self.id}"
         r = httpx.put(url, json={"name": new_name})
         r.raise_for_status()
         self._config.name = new_name
 
     def reconfigure(self, config: VMConfig) -> None:
-        url = f"{self._connector.base_url}/vms/{self.id}"
+        url = f"{self.hypervisor.base_url}/vms/{self.id}"
         r = httpx.put(url, json=dict(config))
         r.raise_for_status()
         self._config.update(config)
 
     def update_config(self, config: VMConfig) -> None:
-        url = f"{self._connector.base_url}/vms/{self.id}"
+        url = f"{self.hypervisor.base_url}/vms/{self.id}"
         r = httpx.put(url, json=dict(config))
         r.raise_for_status()
         self._config.update(config)
@@ -65,7 +65,7 @@ class MockVM(VMInterface):
         return []
 
     def _lifecycle_action(self, action: str):
-        url = f"{self._connector.base_url}/vms/{self.id}/{action}"
+        url = f"{self.hypervisor.base_url}/vms/{self.id}/{action}"
         r = httpx.post(url)
         r.raise_for_status()
         self._config.status = r.json().get("status", self._config.status)
@@ -79,6 +79,13 @@ class MockHypervisorConnector(HypervisorConnector):
         self.base_url = f"http://{host}:{port}"
         # Optionally, store kwargs for future use
         self._extra = kwargs
+
+    @property
+    def status(self) -> VMConfig:
+        url = f"{self.base_url}/status"
+        r = httpx.get(url)
+        r.raise_for_status()
+        return VMConfig(r.json())
 
     @property
     def info(self) -> Box:

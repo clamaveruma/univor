@@ -8,6 +8,8 @@ in an in-memory store. Intended for local development, testing,
 and demonstration purposes.
 """
 import threading
+import sys
+import signal
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -47,14 +49,27 @@ def generate_vm_id(supplied_id: str | None = None) -> str:
 def shutdown():
     """Shutdown the server gracefully."""
     logger.info("Shutdown requested via /shutdown endpoint.")
-    shutdown_event.set()
+    _trigger_shutdown()
     return {"message": "Server shutting down"}
+
+def _trigger_shutdown():
+    if not shutdown_event.is_set():
+        shutdown_event.set()
+        logger.info("Shutdown event set, shutting down daemon.")
 
 @app.get("/status")
 def status():
     """Health/status endpoint for the mock hypervisor daemon."""
     logger.info("Status requested via /status endpoint.")
-    return {"status": "ok", "vms": len(mock_vms)}
+    state = "shutting_down" if shutdown_event.is_set() else "ok"
+    return {"status": state, "vms": len(mock_vms)}
+
+def _sigterm_handler(signum, frame):
+    logger.info(f"SIGTERM received (signal {signum}), triggering shutdown.")
+    _trigger_shutdown()
+    # Let main thread handle exit
+
+signal.signal(signal.SIGTERM, _sigterm_handler)
 
 @app.post("/vms", status_code=201)
 def create_vm(vm: dict):
@@ -204,18 +219,28 @@ def run(port: int = typer.Option(None, help="Port to run the server on (auto if 
     server = uvicorn.Server(config)
 
     def run_server():
-        # This will block until should_exit is set
         server.run()
 
     t = threading.Thread(target=run_server)
     t.start()
+    logger.info(f"Main thread about to wait for shutdown_event on port {port}")
     # Wait for shutdown event
     try:
         shutdown_event.wait()
+        logger.info("shutdown_event.wait() returned in main thread")
     except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt in main thread")
         pass
+    logger.info("shutdown_event set, setting server.should_exit")
     server.should_exit = True
     t.join()
+    logger.info("server thread joined, exiting process")
+    import os
+    logger.info("calling os._exit(0)")
+    os._exit(0)
 
 if __name__ == "__main__":
+    # ...existing code...
     app_cli()
+
+# ...existing code...

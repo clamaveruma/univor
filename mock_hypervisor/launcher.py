@@ -42,7 +42,7 @@ def _start_daemon(port=None):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, close_fds=True)
     selected_port = None
     assert proc.stdout is not None
-    for _ in range(10):
+    for _ in range(20):
         line = proc.stdout.readline()
         if not line:
             break
@@ -91,24 +91,56 @@ def stop():
     pid = _find_daemon_pid()
     port = _get_listening_port_of_pid(pid)
     # Try graceful shutdown
+    shutdown_requested = False
     if port:
         try:
+            print_and_log(f"[launcher] Sending /shutdown to daemon on port {port}")
             httpx.post(f"http://127.0.0.1:{port}/shutdown", timeout=2)
+            shutdown_requested = True
+            print_and_log(f"[launcher] /shutdown request sent successfully.")
+        except Exception as e:
+            print_and_log(f"[launcher] Failed to send /shutdown: {e}")
+    # Poll /status for shutdown state
+    for _ in range(20):
+        try:
+            resp = httpx.get(f"http://127.0.0.1:{port}/status", timeout=1)
+            status = resp.json()
+            if status.get("shutting_down"):
+                print_and_log(json.dumps({"returncode": 0, "msg": f"Daemon (PID {pid}) is shutting down via /shutdown"}))
+                break
         except Exception:
             pass
-    time.sleep(2)
-    if not _pid_running(pid):
-        print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via /shutdown"}))
-        return
+        time.sleep(0.1)
+    # Wait up to 2 seconds for process to exit or become zombie
+    for _ in range(20):
+        if not _pid_running(pid):
+            print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via /shutdown"}))
+            return
+        try:
+            proc = psutil.Process(pid)
+            if proc.status() == psutil.STATUS_ZOMBIE:
+                print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via /shutdown (zombie)"}))
+                return
+        except Exception:
+            pass
+        time.sleep(0.1)
     # Fallback to SIGTERM
     try:
         os.kill(pid, signal.SIGTERM)
     except Exception:
         pass
-    time.sleep(1)
-    if not _pid_running(pid):
-        print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via SIGTERM"}))
-        return
+    for _ in range(10):
+        if not _pid_running(pid):
+            print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via SIGTERM"}))
+            return
+        try:
+            proc = psutil.Process(pid)
+            if proc.status() == psutil.STATUS_ZOMBIE:
+                print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via SIGTERM (zombie)"}))
+                return
+        except Exception:
+            pass
+        time.sleep(0.1)
     print_and_log(json.dumps({"returncode": 1, "msg": f"Failed to stop daemon (PID {pid})"}))
     raise typer.Exit(1)
 

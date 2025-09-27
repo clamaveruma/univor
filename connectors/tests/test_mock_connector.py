@@ -12,8 +12,9 @@ def mockvisor_daemon():
     Always start a new mockvisor daemon for tests using the launcher CLI, and yield the detected port. Shut down after tests.
     """
     import json
+    import sys
     proc = subprocess.run([
-        "python", "-m", "mock_hypervisor.launcher", "start"
+        sys.executable, "-m", "mock_hypervisor.launcher", "start"
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     import json
     try:
