@@ -75,8 +75,8 @@ def test_cannot_start_second_instance():
     time.sleep(1)
     # Try to start second instance
     result2 = runner.invoke(app, ['start', '--port', '5557'])
-    assert result2.exit_code != 0, "Second instance should not start!"
-    assert 'already' in result2.output.lower() or result2.exit_code != 0
+    assert result2.exit_code == 0, "Second instance should return exit code 0 (idempotent)"
+    assert 'already' in result2.output.lower(), "Output should indicate daemon is already running"
     # Cleanup
     runner.invoke(app, ['stop'])
     time.sleep(1)
@@ -88,8 +88,8 @@ def test_error_on_used_port():
     time.sleep(1)
     # Try to start another instance on same port (should fail)
     result2 = runner.invoke(app, ['start', '--port', '5558'])
-    assert result2.exit_code != 0, "Should not be able to start on used port!"
-    assert 'port' in result2.output.lower() or result2.exit_code != 0
+    assert result2.exit_code == 0, "Should return exit code 0 when port is already used"
+    assert 'port' in result2.output.lower(), "Output should indicate port is already used"
     # Cleanup
     runner.invoke(app, ['stop'])
     time.sleep(1)

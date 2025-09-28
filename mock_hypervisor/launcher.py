@@ -46,13 +46,16 @@ def _start_daemon(port=None):
         line = proc.stdout.readline()
         if not line:
             break
-        try:
-            msg = json.loads(line)
-            if msg.get("event") in ("port_selected", "port_used"):
-                selected_port = int(msg["port"])
-                break
-        except Exception:
-            continue
+        line = line.strip()
+        # Only parse lines that look like JSON
+        if line.startswith('{') and line.endswith('}'): 
+            try:
+                msg = json.loads(line)
+                if msg.get("event") in ("port_selected", "port_used"):
+                    selected_port = int(msg["port"])
+                    break
+            except Exception:
+                continue
     time.sleep(0.5)
     if proc.poll() is not None:
         print_error(f"Failed to start daemon. Process exited with code {proc.returncode}.")
@@ -74,8 +77,8 @@ def start(port: int | None = typer.Option(None, help="Port to start the daemon o
         daemon_pid = _find_daemon_pid()
         msg = "A mock_hypervisor daemon is already running"
         running_port = _get_listening_port_of_pid(daemon_pid)
-        result = {"returncode": 1, "msg": msg, "pid": daemon_pid, "port": running_port or "unknown"}
-        exit_code = 1
+        result = {"returncode": 0, "msg": msg, "pid": daemon_pid, "port": running_port or "unknown"}
+        exit_code = 0
     except psutil.NoSuchProcess:
         pid, used_port = _start_daemon(port)
         result = {"returncode": 0, "msg": "Started daemon", "pid": pid, "port": used_port}
@@ -86,7 +89,6 @@ def start(port: int | None = typer.Option(None, help="Port to start the daemon o
 @app.command()
 def stop():
     """Stop the mock_hypervisor daemon by finding its process."""
-    import httpx
     import httpx
     pid = _find_daemon_pid()
     port = _get_listening_port_of_pid(pid)
@@ -105,7 +107,7 @@ def stop():
         try:
             resp = httpx.get(f"http://127.0.0.1:{port}/status", timeout=1)
             status = resp.json()
-            if status.get("shutting_down"):
+            if status.get("status") == "shutting_down":
                 print_and_log(json.dumps({"returncode": 0, "msg": f"Daemon (PID {pid}) is shutting down via /shutdown"}))
                 break
         except Exception:

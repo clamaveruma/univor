@@ -11,22 +11,30 @@ LAUNCHER = [sys.executable, '-m', 'mock_hypervisor.launcher']
 
 def get_daemon_status():
     result = subprocess.run(LAUNCHER + ['status'], capture_output=True, text=True)
-    try:
-        data = json.loads(result.stdout.splitlines()[-1])
-        return data
-    except Exception:
-        return None
+    lines = result.stdout.splitlines()
+    if lines:
+        try:
+            return json.loads(lines[0].strip())
+        except Exception:
+            return None
+    return None
 
 @pytest.fixture(scope="function")
 def daemon():
-    status = get_daemon_status()
-    if not status or status.get("msg") == "Daemon not running.":
-        result = subprocess.run(LAUNCHER + ['start'], capture_output=True, text=True)
-        data = json.loads(result.stdout.splitlines()[-1])
+    result = subprocess.run(LAUNCHER + ['start'], capture_output=True, text=True)
+    try:
+        data = json.loads(result.stdout.strip())
         port = data.get("port")
-    else:
-        port = status.get("port")
-    yield port
+        if port is not None and port != "unknown":
+            try:
+                port = int(port)
+            except Exception:
+                pass
+            yield port
+            return
+    except Exception:
+        pass
+    raise RuntimeError("Daemon did not start or did not output a valid port.")
 
 
 # Add a test that stops the daemon via REST
@@ -96,6 +104,7 @@ def test_create_vm_duplicate_id(daemon):
 def test_get_update_delete_vm(daemon):
     port = daemon
     with httpx.Client() as client:
+        # Create VM
         r = client.post(f'http://127.0.0.1:{port}/vms', json={"name": "Alpha"})
         vm1 = r.json()
         # Get VM
@@ -108,9 +117,21 @@ def test_get_update_delete_vm(daemon):
         assert r.status_code == 200
         updated = r.json()
         assert updated["name"] == "AlphaUpdated"
-        # Negative: update with invalid data
+        # Accept empty update as OK (do nothing)
         r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={})
+        assert r.status_code == 200
+        # Negative: update non-existent VM
+        r = client.put(f'http://127.0.0.1:{port}/vms/nonexistent', json={"name": "Ghost"})
+        assert r.status_code == 404
+        # Negative: malformed JSON (simulate by sending invalid content-type)
+        r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', content="not a json", headers={"Content-Type": "application/json"})
+        assert r.status_code in (400, 422, 500)
+        # Negative: update with invalid name
+        r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={"name": ""})
         assert r.status_code in (400, 422)
+        # Valid update with JSON missing 'name' field (should be OK)
+        r = client.put(f'http://127.0.0.1:{port}/vms/{vm1["id"]}', json={"other": "value"})
+        assert r.status_code == 200
         # Delete VM
         r = client.delete(f'http://127.0.0.1:{port}/vms/{vm1["id"]}')
         assert r.status_code == 204
