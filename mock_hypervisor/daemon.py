@@ -13,6 +13,17 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi import Request
 import json
+from pydantic import BaseModel, Field
+# Pydantic model for VM config validation
+class VMConfigModel(BaseModel):
+    name: str | None = Field(None, min_length=1)
+    cpu: int | None = Field(None, ge=1)
+    memory: int | None = Field(None, ge=1)
+
+# Output model for VM info (extends config)
+class VMInfoModel(VMConfigModel):
+    id: str
+    status: str = Field(default="stopped")
 from common.app_setup import setup_logging
 
 # Set up logging for the daemon
@@ -20,8 +31,9 @@ logger = setup_logging(app_name="univor", daemon=True)
 
 
 # In-memory mock VM store
-mock_vms: dict[str, dict] = {}
+mock_vms: dict[str, VMInfoModel] = {}
 
+from fastapi import HTTPException
 app = FastAPI()
 
 def generate_vm_id(supplied_id: str | None = None) -> str:
@@ -65,73 +77,66 @@ def status():
     return {"status": state, "vms": len(mock_vms)}
 
 
-@app.post("/vms", status_code=201)
-def create_vm(vm: dict):
-    """Create a new virtual machine (VM) and return its details.
-    If name is not provided, a default name is assigned.
-    If name exists, generate a unique name by appending _1, _2, etc."""
-    # Input validation: name is required and must be a non-empty string
-    name = vm.get("name")
-    if not isinstance(name, str) or not name.strip():
-        return JSONResponse(status_code=422, content={"error": "Missing or invalid 'name' field"})
-    # Optionally, validate other fields as needed
-    supplied_id = vm.get("id")
-    vm_id = generate_vm_id(supplied_id)
-    vm["id"] = vm_id
-    vm["status"] = "stopped"  # New VMs start as stopped
-    mock_vms[vm_id] = vm
-    logger.info(f"Created VM: {vm}")
-    return vm
+@app.post("/vms", response_model=VMInfoModel, status_code=201)
+def create_vm(vm: VMConfigModel) -> VMInfoModel:
+    if not isinstance(vm.name, str) or not vm.name.strip():
+        logger.warning(f"Invalid VM name: {vm.name!r}")
+        raise HTTPException(status_code=422, detail="Missing or invalid 'name' field")
+    existing_names = {existing_vm.name for existing_vm in mock_vms.values()}
+    if vm.name in existing_names:
+        logger.warning(f"Duplicate VM name: {vm.name!r}")
+        raise HTTPException(status_code=409, detail="VM with this name already exists")
+    vm_id = generate_vm_id(None)
+    vm_info = VMInfoModel(
+        id=vm_id,
+        name=vm.name,
+        cpu=vm.cpu,
+        memory=vm.memory,
+        status="stopped"
+    )
+    mock_vms[vm_id] = vm_info
+    logger.info(f"Created VM: {vm_info}")
+    return vm_info
 
-@app.get("/vms")
-def list_vms(search: str | None = None):
+@app.get("/vms", response_model=list[VMInfoModel])
+def list_vms(search: str | None = None) -> list[VMInfoModel]:
     """List all VMs, or filter by name if 'search' is provided."""
     logger.info(f"Listing VMs. Search: {search!r}")
     if not search:
         return list(mock_vms.values())
-    filtered = [vm for vm in mock_vms.values() if search in vm["name"]]
+    filtered = [vm for vm in mock_vms.values() if vm.name is not None and search in vm.name]
     logger.debug(f"Filtered VMs: {filtered}")
     return filtered
 
-@app.get("/vms/{vm_id}")
-def get_vm(vm_id: str):
+@app.get("/vms/{vm_id}", response_model=VMInfoModel)
+def get_vm(vm_id: str) -> VMInfoModel:
     """Retrieve details for a specific VM by its ID."""
     logger.info(f"Retrieving VM: {vm_id}")
     vm = mock_vms.get(vm_id)
     if not vm:
         logger.warning(f"VM not found: {vm_id}")
-        return JSONResponse(status_code=404, content={"error": "VM not found"})
+        raise HTTPException(status_code=404, detail="VM not found")
     logger.debug(f"VM details: {vm}")
     return vm
 
-@app.put("/vms/{vm_id}")
-def update_vm(vm_id: str, update: dict):
+@app.put("/vms/{vm_id}", response_model=VMInfoModel)
+def update_vm(vm_id: str, update: VMConfigModel) -> VMInfoModel:
     """Update an existing VM's details by its ID."""
-    try:
-        logger.debug(f"update_vm CALLED for vm_id={vm_id} with update={update!r}")
-        vm = mock_vms.get(vm_id)
-        if not vm:
-            logger.debug(f"VM not found: {vm_id}")
-            return JSONResponse(status_code=404, content={"error": "VM not found"})
-        # If 'name' is present, it must be a non-empty string
-        if "name" in update:
-            if not isinstance(update["name"], str) or not update["name"].strip():
-                logger.debug(f"Invalid 'name' in update: {update['name']!r}")
-                return JSONResponse(status_code=422, content={"error": "Missing or invalid 'name' field in update"})
-        logger.debug(f"Before update: {vm!r}")
-        vm.update(update)
-        logger.debug(f"After update: {vm!r}")
-        logger.debug(f"Returning JSONResponse(content=dict(vm)): type(vm)={type(vm)}, keys={list(vm.keys())}")
-        return JSONResponse(content=dict(vm))
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        logger.error(f"Exception in update_vm: {e}\nTraceback:\n{tb}")
-        # Return the error and traceback in the response for debugging
-        return JSONResponse(status_code=500, content={
-            "error": str(e),
-            "traceback": tb
-        })
+    vm = mock_vms.get(vm_id)
+    if not vm:
+        logger.debug(f"VM not found: {vm_id}")
+        raise HTTPException(status_code=404, detail="VM not found")
+    if update.name is not None:
+        if not isinstance(update.name, str) or not update.name.strip():
+            logger.debug(f"Invalid 'name' in update: {update.name!r}")
+            raise HTTPException(status_code=422, detail="Missing or invalid 'name' field in update")
+        vm.name = update.name
+    if update.cpu is not None:
+        vm.cpu = update.cpu
+    if update.memory is not None:
+        vm.memory = update.memory
+    logger.debug(f"After update: {vm!r}")
+    return vm
 
 @app.delete("/vms/{vm_id}", status_code=204)
 def delete_vm(vm_id: str):
@@ -140,25 +145,27 @@ def delete_vm(vm_id: str):
     if vm_id in mock_vms:
         del mock_vms[vm_id]
         logger.info(f"Deleted VM: {vm_id}")
-        return JSONResponse(status_code=204, content=None)
+        return
     logger.warning(f"VM not found for deletion: {vm_id}")
-    return JSONResponse(status_code=404, content={"error": "VM not found"})
+    raise HTTPException(status_code=404, detail="VM not found")
 
-@app.post("/vms/{vm_id}/clone", status_code=201)
-def clone_vm(vm_id: str, clone: dict):
+@app.post("/vms/{vm_id}/clone", response_model=VMInfoModel, status_code=201)
+def clone_vm(vm_id: str, clone: VMConfigModel) -> VMInfoModel:
     """Clone an existing VM, assigning a new ID and (optionally) a new name."""
     orig = mock_vms.get(vm_id)
     if not orig:
-        return JSONResponse(status_code=404, content={"error": "VM not found"})
-    # Validate clone: 'name' is required and must be a non-empty string
-    if "name" not in clone or not isinstance(clone["name"], str) or not clone["name"].strip():
-        return JSONResponse(status_code=422, content={"error": "Missing or invalid 'name' field in clone"})
-    new_vm = orig.copy()
-    supplied_id = clone.get("id")
+        raise HTTPException(status_code=404, detail="VM not found")
+    if not isinstance(clone.name, str) or not clone.name.strip():
+        raise HTTPException(status_code=422, detail="Missing or invalid 'name' field in clone")
+    supplied_id = None
     new_vm_id = generate_vm_id(supplied_id)
-    new_vm["id"] = new_vm_id
-    new_vm["name"] = clone["name"]
-    new_vm["status"] = "stopped"  # Cloned VMs also start as stopped
+    new_vm = VMInfoModel(
+        id=new_vm_id,
+        name=clone.name,
+        cpu=clone.cpu if clone.cpu is not None else orig.cpu,
+        memory=clone.memory if clone.memory is not None else orig.memory,
+        status="stopped"
+    )
     mock_vms[new_vm_id] = new_vm
     logger.info(f"Cloned VM: {new_vm}")
     return new_vm
@@ -168,16 +175,16 @@ def vm_lifecycle(vm_id: str, action: str):
     """Change the lifecycle state of a VM (start, stop, pause, resume)."""
     vm = mock_vms.get(vm_id)
     if not vm:
-        return JSONResponse(status_code=404, content={"error": "VM not found"})
+        raise HTTPException(status_code=404, detail="VM not found")
     if action not in ["start", "stop", "pause", "resume"]:
-        return JSONResponse(status_code=400, content={"error": "Invalid action"})
+        raise HTTPException(status_code=400, detail="Invalid action")
     new_status = {
         "start": "running",
         "stop": "stopped",
         "pause": "paused",
         "resume": "running"
     }[action]
-    vm["status"] = new_status
+    vm.status = new_status
     logger.info(f"VM {vm_id} lifecycle action '{action}' -> status '{new_status}'")
     return vm
     #TODO: implement lifecycle logic: FSM

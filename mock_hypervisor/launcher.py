@@ -83,6 +83,7 @@ def start(port: int | None = typer.Option(None, help="Port to start the daemon o
         pid, used_port = _start_daemon(port)
         result = {"returncode": 0, "msg": "Started daemon", "pid": pid, "port": used_port}
         exit_code = 0
+    # No newline sanitization
     print(json.dumps(result))
     raise typer.Exit(exit_code)
 
@@ -90,61 +91,78 @@ def start(port: int | None = typer.Option(None, help="Port to start the daemon o
 def stop():
     """Stop the mock_hypervisor daemon by finding its process."""
     import httpx
-    pid = _find_daemon_pid()
+    result = {}
+    try:
+        pid = _find_daemon_pid()
+    except psutil.NoSuchProcess as e:
+        result = {"returncode": 0, "msg": "Daemon not running.", "error": str(e)}
+        print(json.dumps(result))
+        raise typer.Exit(0)
     port = _get_listening_port_of_pid(pid)
+    shutdown_method = None
+    shutdown_status = None
     # Try graceful shutdown
-    shutdown_requested = False
     if port:
         try:
-            print_and_log(f"[launcher] Sending /shutdown to daemon on port {port}")
             httpx.post(f"http://127.0.0.1:{port}/shutdown", timeout=2)
-            shutdown_requested = True
-            print_and_log(f"[launcher] /shutdown request sent successfully.")
+            shutdown_method = "/shutdown"
         except Exception as e:
-            print_and_log(f"[launcher] Failed to send /shutdown: {e}")
+            shutdown_method = "failed /shutdown"
     # Poll /status for shutdown state
     for _ in range(20):
         try:
             resp = httpx.get(f"http://127.0.0.1:{port}/status", timeout=1)
             status = resp.json()
             if status.get("status") == "shutting_down":
-                print_and_log(json.dumps({"returncode": 0, "msg": f"Daemon (PID {pid}) is shutting down via /shutdown"}))
+                shutdown_status = "shutting_down"
                 break
         except Exception:
             pass
         time.sleep(0.1)
     # Wait up to 2 seconds for process to exit or become zombie
+    stopped = False
     for _ in range(20):
         if not _pid_running(pid):
-            print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via /shutdown"}))
-            return
+            stopped = True
+            shutdown_method = shutdown_method or "/shutdown"
+            break
         try:
             proc = psutil.Process(pid)
             if proc.status() == psutil.STATUS_ZOMBIE:
-                print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via /shutdown (zombie)"}))
-                return
+                stopped = True
+                shutdown_method = (shutdown_method or "/shutdown") + " (zombie)"
+                break
         except Exception:
             pass
         time.sleep(0.1)
-    # Fallback to SIGTERM
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except Exception:
-        pass
-    for _ in range(10):
-        if not _pid_running(pid):
-            print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via SIGTERM"}))
-            return
+    # Fallback to SIGTERM if not stopped
+    if not stopped:
         try:
-            proc = psutil.Process(pid)
-            if proc.status() == psutil.STATUS_ZOMBIE:
-                print_and_log(json.dumps({"returncode": 0, "msg": f"Stopped daemon (PID {pid}) via SIGTERM (zombie)"}))
-                return
+            os.kill(pid, signal.SIGTERM)
+            shutdown_method = "SIGTERM"
         except Exception:
-            pass
-        time.sleep(0.1)
-    print_and_log(json.dumps({"returncode": 1, "msg": f"Failed to stop daemon (PID {pid})"}))
-    raise typer.Exit(1)
+            shutdown_method = "failed SIGTERM"
+        for _ in range(10):
+            if not _pid_running(pid):
+                stopped = True
+                break
+            try:
+                proc = psutil.Process(pid)
+                if proc.status() == psutil.STATUS_ZOMBIE:
+                    stopped = True
+                    shutdown_method = "SIGTERM (zombie)"
+                    break
+            except Exception:
+                pass
+            time.sleep(0.1)
+    if stopped:
+        result = {"returncode": 0, "msg": f"Stopped daemon (PID {pid})", "method": shutdown_method}
+        print(json.dumps(result))
+        raise typer.Exit(0)
+    else:
+        result = {"returncode": 1, "msg": f"Failed to stop daemon (PID {pid})", "method": shutdown_method}
+        print(json.dumps(result))
+        raise typer.Exit(1)
 
 @app.command()
 def kill():
@@ -153,9 +171,11 @@ def kill():
     os.kill(pid, signal.SIGKILL)
     time.sleep(1)
     if not _pid_running(pid):
-        print_and_log(json.dumps({"returncode": 0, "msg": f"Killed daemon with PID {pid}"}))
+        msg = f"Killed daemon with PID {pid}"
+        print_and_log(json.dumps({"returncode": 0, "msg": msg}))
     else:
-        print_and_log(json.dumps({"returncode": 1, "msg": f"Failed to kill daemon with PID {pid}."}))
+        msg = f"Failed to kill daemon with PID {pid}."
+        print_and_log(json.dumps({"returncode": 1, "msg": msg}))
         raise typer.Exit(1)
 
 
@@ -193,6 +213,7 @@ def status():
     except Exception as e:
         result["msg"] = f"Error checking daemon status: {e}"
         result["api_status"] = {"error": str(e)}
+    # No newline sanitization
     print_and_log(json.dumps(result))
     
 @app.command()
@@ -234,7 +255,7 @@ def _get_listening_port_of_pid(pid: int | None) -> int | None:
 
 # Assign logger globally
 logger = setup_logging(app_name="mock_hypervisor_launcher", daemon=False)
-monkeypatch_print()
+# monkeypatch_print()  # Disabled: Rich print adds unwanted newlines and formatting to machine-readable output (e.g., JSON)
 
 if __name__ == "__main__":
     app()

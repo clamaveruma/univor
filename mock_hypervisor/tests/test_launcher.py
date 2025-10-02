@@ -125,7 +125,7 @@ def test_auto_port():
     # Check process is running and port is listening
     assert psutil.pid_exists(pid)
     proc = psutil.Process(pid)
-    cons = proc.connections(kind='inet')
+    cons = proc.net_connections(kind='inet')
     assert any(c.status == psutil.CONN_LISTEN and c.laddr.port == int(port) for c in cons)
     # Cleanup
     runner.invoke(app, ['stop'])
