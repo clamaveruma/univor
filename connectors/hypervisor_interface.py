@@ -15,7 +15,19 @@ class VMConfig(Box):
     """
    
 
-class VMInterface(Protocol):
+class HypervisorSessionProtocol(Protocol):
+    """Interface Protocol for hypervisor session objects.
+    To be subclassed by actual session implementations.
+    """
+    @property
+    def hypervisor_type(self) -> str: ...
+    @property
+    def is_alive(self) -> bool: ...
+    def connect(self): ...
+    def disconnect(self): ...   
+
+
+class VMConnector(Protocol):
     """
     Protocol for a Virtual Machine (VM) object.
     Implementations should provide properties and methods to represent and manage a VM.
@@ -60,26 +72,28 @@ class VMInterface(Protocol):
 
 class HypervisorConnector(Protocol):
     """
-    Protocol for hypervisor connectors.
-    Implementations must provide methods to manage VMs and interact with the hypervisor.
+       Protocol for a Hypervisor Connector.
+       Implementations must provide methods to manage VMs and interact with the hypervisor.
+       Implementations must accept a HypervisorSessionProtocol instance upon initialization.
+       The 'session' attribute must be an instance of HypervisorSessionProtocol.    
     """
-    host: str
-    port: int
-    user: str
-    base_url: str
-    # The above variables must be defined as instance attributes (not properties) in implementations.
-
-    def __init__(self, host: str, port: int, user: str, password: str, **kwargs): ...
     
+    
+    
+    def __init__(self, session: HypervisorSessionProtocol) -> None:
+              ... 
+              # In the implementation, initialize with a session object,
+              # and store it as self.session.   
+              
     @property
     def status(self) -> VMConfig: ...
     "returns information about the hypervisor"
     
-    def list_vms(self) -> List["VMInterface"]: ...
-    def get_vm(self, vm_id: str) -> "VMInterface": ...
-    def create_vm(self, config: VMConfig) -> "VMInterface": ...
-    def clone_vm(self, source_vm: "VMInterface", config: VMConfig) -> "VMInterface": ...
-    def search_vm(self, query: str) -> List["VMInterface"]: ...
+    def list_vms(self) -> List["VMConnector"]: ...
+    def get_vm(self, vm_id: str) -> "VMConnector": ...
+    def create_vm(self, config: VMConfig) -> "VMConnector": ...
+    def clone_vm(self, source_vm: "VMConnector", config: VMConfig) -> "VMConnector": ...
+    def search_vm(self, query: str) -> List["VMConnector"]: ...
 
     @property
     def info(self) -> Box:
