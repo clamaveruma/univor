@@ -1,3 +1,8 @@
+# TODO: simplifica VMconector, creo que vale con el VM_id, lo mínimo necesario para operar
+# hacer tests , modificar lo que hay, para el conector de hypervisor y de VM.
+# hacer tests del connections manager . Añadir logs y verlos
+
+
 from typing import Any
 import uuid
 import httpx

@@ -1,0 +1,46 @@
+# Sample YAML document for the Textual editor demo
+
+application:
+  name: Demo Service
+  version: "1.0.0"
+  description: |
+    Example configuration showing different YAML constructs.
+    Feel free to edit values and watch the JSON preview update.
+
+
+######
+environment:
+  active: 12
+  region: eu-west-1
+  features:
+    - logging
+    - k
+    - metrics
+    - tracing
+
+database:
+  engine: 
+   - postgres
+   - k
+   - 9
+  host: localhost
+  port: 5432
+  credentials:
+    username: demo_user
+    password: secret
+
+services:
+  api:
+    replicas: 3
+    resources:
+      cpu: 500m
+      memory: 256Mi
+  worker:
+    replicas: 1
+    schedule: "*/5 * * * *"
+
+metadata:
+  tags:
+    owner: team-alpha
+    project: textual-demo
+  last_updated: 2025-10-14
