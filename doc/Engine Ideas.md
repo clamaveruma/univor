@@ -14,7 +14,18 @@ The descriptor object stores:
 
  - Mark when a operation is being executed, only for async tasks. Only in memory, not saved on disk.
 
-
+```mermaid
+stateDiagram-v2
+    Provisioned --> [*]: deprovision
+    [*] --> Provisioned: provision
+    
+    Provisioned --> Deployed: deploy
+    Deployed --> Provisioned: undeploy
+    
+    Deployed --> Unreachable: connection lost
+    Unreachable --> Deployed: reconnected
+    Unreachable --> Provisioned: VM missing
+```
 
 ## Operations
 An operation has a target object, or more than one, e.g., some VM descriptors.
