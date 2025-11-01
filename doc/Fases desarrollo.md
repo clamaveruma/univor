@@ -1,3 +1,3 @@
-# Fases de desarrollo
+# Development Phases
 - [ ] Mock hypervisor
 - [x]  
