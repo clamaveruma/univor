@@ -29,7 +29,7 @@ class Descriptor(BaseModel):
 
     status: str = Field(default="provisioned")
     vm_id: str | None = None
-    full_name: str
+    folder_path: str = Field(default="/", description="Path of the containing folder")
     name: str
     deployed_config: dict[str, Any] | None = None
     _local_definition: LocalDefinition = Field(alias="local_definition")
@@ -48,6 +48,15 @@ class Descriptor(BaseModel):
     @local_definition.setter
     def local_definition(self, value: Any) -> None:
         self._local_definition = coerce_local_definition(value)
+
+    @property
+    def full_name(self) -> str:
+        base = self.folder_path.rstrip("/")
+        if not base:
+            base = "/"
+        if base == "/":
+            return f"/{self.name}".replace("//", "/")
+        return f"{base}/{self.name}".replace("//", "/")
 
     def with_local_definition(self, value: Any) -> Descriptor:
         """Return a copy of this descriptor with a normalized local definition."""
